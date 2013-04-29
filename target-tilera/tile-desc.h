@@ -12,7 +12,7 @@
  *   more details.
  */
 
-#ifndef __tilegx__
+#ifdef __tilepro__
 #include "tile-desc_32.h"
 #else
 #include "tile-desc_64.h"

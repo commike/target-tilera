@@ -27,8 +27,6 @@
 
 #define CPUArchState struct CPUTileraState
 
-#include "cpu-defs.h"
-
 #include "softfloat.h"
 
 #define TARGET_HAS_ICE 1
@@ -53,15 +51,16 @@ enum {
     TILERA_GX_8009 = 3
 };
 
-#define MASK16 0xffff;
-#ifndef __tilegx__	/* Tile64 and TilePro  */
+#define MASK16 0xffff
+
+#ifdef __tilepro__	/* Tile64 and TilePro  */
 
 #define ELF_MACHINE     EM_TILERA32
 
 #define TARGET_PHYS_ADDR_SPACE_BITS  36
 #define TARGET_VIRT_ADDR_SPACE_BITS  32
 #define TARGET_LONG_BITS 32
-#define TARGET_PAGE_BITS 16					/*Tilera traditionally supports 64 kbyte pages*/
+#define TARGET_PAGE_BITS 16				/*Tilera traditionally supports 64 kbyte pages*/
 
 #else
 #define ELF_MACHINE     EM_TILERA64
@@ -71,8 +70,8 @@ enum {
 #define TARGET_LONG_BITS 64
 #define TARGET_PAGE_BITS  16				/*Tilera traditionally supports 64 kbyte pages*/
 
-#define WORD_SIZE 64 						/*The size of a machine word in bits. The 
-											TILE-Gx Processor is a 64-bit machine.*/
+#define WORD_SIZE 64 					/*The size of a machine word in bits. The 
+							TILE-Gx Processor is a 64-bit machine.*/
 #endif
 
 
@@ -86,10 +85,7 @@ enum {
 
 /* MMU definitions */
 
-#ifdef __tilegx__
-#define TARGET_PHYS_ADDR_SPACE_BITS 40
-#define TARGET_VIRT_ADDR_SPACE_BITS 42
-
+#ifndef __tilepro__
 
 #if !defined(CONFIG_USER_ONLY)
 	/* Software TLB cache */
@@ -101,10 +97,11 @@ enum {
 		dtlb_current_attr_t dtlbe_attr[32];
 	} tilegx_tlb_t;
 
-	tilegx_tlb_t tilegx_tlb;
+extern	tilegx_tlb_t tilegx_tlb;
 
 #endif
 #endif
+#include "cpu-defs.h"
 
 
 enum {
@@ -112,10 +109,10 @@ enum {
 	TILE_REG_TP=53,
 	TILE_REG_SP=54,
 	TILE_REG_LR=55
-}
+};
 	
 typedef struct {
-#ifdef __tilegx__
+#ifndef __tilepro__
 	aux_perf_count_0_t	aux_perf_count_0 ;
 	aux_perf_count_1_t	aux_perf_count_1 ;
 	aux_perf_count_ctl_t	aux_perf_count_ctl ;
@@ -614,9 +611,19 @@ typedef struct {
 #endif
 } tile_sprf;
 
+/* MMU modes definitions */
+#define NB_MMU_MODES 3
+#define MMU_MODE0_SUFFIX _kernel
+#define MMU_MODE1_SUFFIX _user
+#define MMU_MODE2_SUFFIX _hypv
+#define MMU_KERNEL_IDX 0
+#define MMU_USER_IDX 1
+#define MMU_HYPV_IDX 2
 
-typedef struct {
-#ifdef __tilegx__
+typedef struct CPUTileraState CPUTileraState;
+
+struct CPUTileraState {
+#ifndef __tilepro__
 
 	uint64_t	gpr[56];
 	/*uint64_t	fp;
@@ -638,7 +645,8 @@ typedef struct {
 	union {
 	uint64_t spr[SPR_MAX];
 	tile_sprf spr_names;
-	}
+	};
+
 	
 #else	
 
@@ -662,27 +670,30 @@ typedef struct {
 	union {
 	uint32_t spr[SPR_MAX];
 	tile_sprf spr_names;
-	}
+	};
 
 #endif
-    
-    /* This alarm doesn't exist in real hardware */
-    struct QEMUTimer *alarm_timer;
-    uint64_t alarm_expire;
+	/* These pass data from the exception logic in the translator and
+	helpers to the OS entry point.  This is used for both system
+	emulation and user-mode.  */
+	uint64_t trap_arg0;
+	uint64_t trap_arg1;
+	uint64_t trap_arg2;
 
-#if TARGET_LONG_BITS > HOST_LONG_BITS
-    /* temporary fixed-point registers
-     * used to emulate 64 bits target on 32 bits hosts
-     */
-    target_ulong t0, t1;
-#endif
+	uint64_t lock_addr;
+	uint64_t lock_st_addr;
+	uint64_t lock_value;
 
-    /* Those resources are used only in QEMU core */
-    CPU_COMMON
+	/* This alarm doesn't exist in real hardware */
+	struct QEMUTimer *alarm_timer;
+	uint64_t alarm_expire;
 
+	/* Those resources are used only in QEMU core */
+	CPU_COMMON
 
-    int error_code;
-}CPUTileraState;
+	int mmu_idx;
+	int error_code;
+};
 
 #define cpu_init cpu_tilera_init
 #define cpu_exec cpu_tilera_exec
@@ -693,11 +704,6 @@ typedef struct {
 #include "cpu-qom.h"
 
 
-/* MMU modes definitions */
-#define MMU_MODE0_SUFFIX _user
-#define MMU_MODE1_SUFFIX _kernel
-#define MMU_MODE2_SUFFIX _hypv
-#define MMU_USER_IDX 0
 static inline int cpu_mmu_index (CPUTileraState *env)
 {
     return env->mmu_idx;
@@ -705,7 +711,7 @@ static inline int cpu_mmu_index (CPUTileraState *env)
 
 
 CPUTileraState * cpu_tilera_init (const char *cpu_model);
-int cpu_tilera_exec(CPUTileraState *s);
+int cpu_tilera_exec (CPUTileraState *s);
 /* you can call this signal handler from your SIGBUS and SIGSEGV
    signal handlers to inform the virtual CPU of exceptions. non zero
    is returned if the signal was handled by the virtual CPU.  */
@@ -715,6 +721,7 @@ int cpu_tilera_handle_mmu_fault (CPUTileraState *env, uint64_t address, int rw,
                                 int mmu_idx);
 #define cpu_handle_mmu_fault cpu_tilera_handle_mmu_fault
 void do_interrupt (CPUTileraState *env);
+void do_restore_state(CPUTileraState *env, uintptr_t retaddr);
 
 static inline void cpu_get_tb_cpu_state(CPUTileraState *env, target_ulong *pc,
                                         target_ulong *cs_base, int *pflags)
@@ -755,5 +762,43 @@ static inline void cpu_pc_from_tb(CPUTileraState *env, TranslationBlock *tb)
 {
     env->pc = tb->pc;
 }
+
+/* prototypes of auxiliary functions in helper.c */
+inline int64_t sign_extend(int64_t n, int num_bits);
+
+inline int64_t sign_extend_1(int64_t n);
+
+inline int64_t sign_extend_8(int64_t n);
+
+inline int64_t sign_extend_16(int64_t n);
+
+inline int64_t sign_extend_17(int64_t n);
+
+inline int64_t sign_extend_32(int64_t n);
+
+inline unsigned char unsigned_saturate8(int64_t n);
+
+inline char signed_saturate8 (int64_t n);
+
+inline short signed_saturate16 (int64_t n);
+
+inline int signed_saturate32 (int64_t n);
+
+inline int get_byte (int64_t word, int num);
+
+inline int64_t set_byte(int64_t word, int num, int val);
+
+inline int get_2_byte (int64_t word, int num);
+
+inline int64_t set_2_byte(int64_t word, int num, int val);
+
+inline int get_4_byte (int64_t word, int num);
+
+inline int64_t set_4_byte(int64_t word, int num, int64_t val);
+
+inline int little_endian (CPUTileraState *env);
+
+void QEMU_NORETURN dynamic_excp(CPUTileraState *env, uintptr_t retaddr,
+                                int excp, int error);
 
 #endif /* !defined (__CPU_TILERA_H__) */

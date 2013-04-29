@@ -21,7 +21,7 @@
 #ifndef opcode_tilepro_h
 #define opcode_tilepro_h
 
-#include "opcode.h"
+#include "opcode_tilepro.h"
 
 
 enum

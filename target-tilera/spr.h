@@ -21,18 +21,12 @@
 #if !defined (__CPU_TILERA_SPR_H__)
 #define __CPU_TILERA_SPR_H__
 
-#ifdef __tilegx__
-#include "spr_64bit.h"
-#else
+#ifdef __tilepro__
 #include "spr_32bit.h"
+#else
+#include "spr_64bit.h"
 #endif
 
-/* returns spr_index (serial no) against given address in spr file */
-uint16_t spr_index (uint16_t addr)
-{
-	int i;
-	for (i = 0; i < SPR_MAX; i++)
-		if (spr_addr[i] == addr) return i;
-	return SPR_MAX;
-}
+uint16_t spr_index (uint16_t addr);
 
+#endif

@@ -71,10 +71,6 @@ typedef enum {
 /* global register indexes */
 static TCGv_ptr cpu_env;
 static TCGv tile_gpr[56];
-/*static TCGv tile_fp;
-static TCGv tile_tp;
-static TCGv tile_sp;
-static TCGv tile_lr;*/
 static TCGv tile_sn;
 static TCGv tile_idn[2];
 static TCGv tile_udn[4];
@@ -82,7 +78,7 @@ static TCGv tile_zero;
 static TCGv tile_pc;
 static TCGv tile_spr[SPR_MAX];
 
-static char spu_reg_names[55+SPR_MAX];
+static char cpu_reg_names[55+SPR_MAX];
 
 #include "gen-icount.h"
 
@@ -162,18 +158,20 @@ static void gen_excp_1(int exception, int error_code)
 
 static ExitStatus gen_excp(DisasContext *ctx, int exception, int error_code)
 {
-    tcg_gen_movi_i64(cpu_pc, ctx->pc);
+    tcg_gen_movi_i64(tile_pc, ctx->pc);
     gen_excp_1(exception, error_code);
     return EXIT_NORETURN;
 }
 
 static inline ExitStatus gen_invalid(DisasContext *ctx)
 {
-    return gen_excp(ctx, EXCP_OPCDEC, 0);
+    return gen_excp(ctx, ILL, 0);
 }
 
+#include "opcode.h"
+#include "tile-desc.h"
 
-#ifdef __tilegx__
+#ifndef __tilepro__
 #define TILE_MAX_INSTRUCTIONS_PER_BUNDLE TILEGX_MAX_INSTRUCTIONS_PER_BUNDLE
 #define tile_decoded_instruction tilegx_decoded_instruction
 #define tile_mnemonic tilegx_mnemonic
@@ -203,12 +201,11 @@ typedef int64_t bt_int_reg_t;
 typedef int bt_int_reg_t;
 #endif
 
-
+typedef struct insn_bundle insn_bundle;
 struct insn_bundle {
 	uint64_t bits;
 	int num_insns;
-	struct tilegx_decoded_instruction
-	insns[TILE_MAX_INSTRUCTIONS_PER_BUNDLE];
+	struct tilegx_decoded_instruction insns[TILE_MAX_INSTRUCTIONS_PER_BUNDLE];
 };
 
 static int use_goto_tb(DisasContext *ctx, uint64_t dest)
@@ -238,9 +235,9 @@ static ExitStatus gen_bdirect(DisasContext *ctx, int64_t jump_off)
 
 static ExitStatus gen_bdirectr (DisasContext *ctx, TCGv_i64 reg)
 {
-	uint64_t dest = reg.i64 & ALIGNED_INSTRUCTION_MASK;
+	uint64_t dest = reg & ALIGNED_INSTRUCTION_MASK;
 		
-    if (reg.i64 == 0) {
+    if (reg == 0) {
         return 0;
     } else if (use_goto_tb(ctx, dest)) {
         tcg_gen_goto_tb(0);
@@ -292,13 +289,9 @@ static ExitStatus translate_one(DisasContext *ctx, uint64_t insn)
 {
 
 insn_bundle bundle;
-uint8_t ins_num, opr_num, dest_reg, src_reg[4], src_reg_num, imm_num;
+uint8_t ins_num, opr_num, src_reg[4], src_reg_num, imm_num;
+uint8_t dest_reg = 0;
 int64_t imm64[3];
-int8_t imm8;
-int16_t imm16;
-int32_t imm32;
-TCGv_i32 l_1, l_2, l_3, l_4;
-TCGv_i64 ll_1, ll_2, ll_3;
 
 #ifndef CONFIG_USER_ONLY
 
@@ -319,14 +312,14 @@ TCGv_i64 ll_1, ll_2, ll_3;
 
 	for (ins_num=0;ins_num<bundle.num_insns;ins_num++) {
 		for (opr_num=0, src_reg_num=0, imm_num=0 ;opr_num<bundle.insns[ins_num].opcode->num_operands;opr_num++) {	
-			if (bundle.insns[ins_num].operands[opr_num]->type = TILEGX_OP_TYPE_REGISTER) {
+			if (bundle.insns[ins_num].operands[opr_num]->type == TILEGX_OP_TYPE_REGISTER) {
 				if (bundle.insns[ins_num].operands[opr_num]->is_dest_reg) dest_reg = bundle.insns[ins_num].operand_values[opr_num];
-				else if (bundle.insns[ins_num].operands[opr_num]->is_src_reg) src_reg[src_reg_num++]= bundle.insns[ins_num].operand_values[opr_num];
-				else ;
+				else if (bundle.insns[ins_num].operands[opr_num]->is_src_reg) src_reg[src_reg_num++] = bundle.insns[ins_num].operand_values[opr_num];
+				else {};
 			}
 
-			else if (bundle.insns[ins_num].operands[opr_num]->type = TILEGX_OP_TYPE_IMMEDIATE) imm64[imm_num++] = bundle.insns[ins_num].operand_values[opr_num];
-			else ;
+			else if (bundle.insns[ins_num].operands[opr_num]->type == TILEGX_OP_TYPE_IMMEDIATE) imm64[imm_num++] = bundle.insns[ins_num].operand_values[opr_num];
+			else {};
 		}	
 		
 		TCGv_i32 l_1 = tcg_temp_new_i32();
@@ -348,7 +341,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 		
 			break;
 		case TILEGX_OPC_MOVE:
-			tcg_gen_mov_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]);
+			tcg_gen_mov_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_MOVEI:
 			tcg_gen_movi_i64(ll_1, imm64[0]);
@@ -423,7 +416,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			break;
 		case TILEGX_OPC_ADDXSC:
 			tcg_gen_add_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
-			gen_saturate_64s_i32(l_3, tile_gpr[dest_reg]);
+			gen_helper_saturate_64s_i32(l_3, tile_gpr[dest_reg]);
 			tcg_gen_ext32s_i64(tile_gpr[dest_reg],(TCGv_i64) l_3);
 			break;
 		case TILEGX_OPC_AND:
@@ -433,10 +426,10 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_andi_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BEQZ:
-			gen_bcond_internal(ctx, TCG_COND_EQ, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_EQ, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BEQZT:
-			gen_bcond_internal(ctx, TCG_COND_EQ, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_EQ, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BFEXTS:
 			gen_helper_bfexts(tile_gpr[dest_reg], tile_gpr[src_reg[0]], imm64[0], imm64[1]);	
@@ -445,69 +438,69 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_bfextu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], imm64[0], imm64[1]);
 			break;
 		case TILEGX_OPC_BFINS:
-			gen_helper_bfins(tile_gpr[dest_reg], tile_gpr[src_reg[0]], imm64[0], imm64[1]);
+			gen_helper_bfins(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], imm64[0], imm64[1]);
 			break;
 		case TILEGX_OPC_BGEZ:
-			gen_bcond_internal(ctx, TCG_COND_GE, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_GE, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BGEZT:
-			gen_bcond_internal(ctx, TCG_COND_GE, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_GE, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BGTZ:
-			gen_bcond_internal(ctx, TCG_COND_GT, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_GT, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BGTZT:
-			gen_bcond_internal(ctx, TCG_COND_GT, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_GT, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BLBC:
-			tcg_gen_andi_i64(ll_1, tile_gpr[src_reg[0], 0x01);
+			tcg_gen_andi_i64(ll_1, tile_gpr[src_reg[0]], 0x01);
 			gen_bcond_internal(ctx, TCG_COND_EQ, ll_1, imm64[0]);
 			break;
 		case TILEGX_OPC_BLBCT:
-			tcg_gen_andi_i64(ll_1, tile_gpr[src_reg[0], 0x01);
+			tcg_gen_andi_i64(ll_1, tile_gpr[src_reg[0]], 0x01);
 			gen_bcond_internal(ctx, TCG_COND_EQ, ll_1, imm64[0]);
 			break;
 		case TILEGX_OPC_BLBS:
-			tcg_gen_andi_i64(ll_1, tile_gpr[src_reg[0], 0x01);
+			tcg_gen_andi_i64(ll_1, tile_gpr[src_reg[0]], 0x01);
 			gen_bcond_internal(ctx, TCG_COND_NE, ll_1, imm64[0]);
 			break;
 		case TILEGX_OPC_BLBST:
-			tcg_gen_andi_i64(ll_1, tile_gpr[src_reg[0], 0x01);
+			tcg_gen_andi_i64(ll_1, tile_gpr[src_reg[0]], 0x01);
 			gen_bcond_internal(ctx, TCG_COND_NE, ll_1, imm64[0]);
 			break;
 		case TILEGX_OPC_BLEZ:
-			gen_bcond_internal(ctx, TCG_COND_LE, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_LE, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BLEZT:
-			gen_bcond_internal(ctx, TCG_COND_LE, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_LE, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BLTZ:
-			gen_bcond_internal(ctx, TCG_COND_LT, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_LT, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BLTZT:
-			gen_bcond_internal(ctx, TCG_COND_LT, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_LT, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BNEZ:
-			gen_bcond_internal(ctx, TCG_COND_NE, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_NE, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_BNEZT:
-			gen_bcond_internal(ctx, TCG_COND_NE, tile_gpr[src_reg[0], imm64[0]);
+			gen_bcond_internal(ctx, TCG_COND_NE, tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_CLZ:
 			gen_helper_clz(tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_CMOVEQZ:
-			gen_helper_cmoveqz(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_cmoveqz(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_CMOVNEZ:
-			gen_helper_cmovnez(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_cmovnez(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_CMPEQ:
 			gen_helper_cmpeq(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_CMPEQI:
 			tcg_gen_movi_i64(ll_1, imm64[0]);
-			gen_helper_cmpeqi(tile_gpr[dest_reg], tile_gpr[src_reg[0]], );ll_1
+			gen_helper_cmpeqi(tile_gpr[dest_reg], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_CMPEXCH:
 			
@@ -531,7 +524,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 		case TILEGX_OPC_CMPLTU:
 			gen_helper_cmpltu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
-		case TILEGX_OPC_CMPLTU:
+		case TILEGX_OPC_CMPLTUI:
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_cmpltu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], ll_1);
 			break;
@@ -542,10 +535,10 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_cmul(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_CMULA:
-			gen_helper_cmula(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_cmula(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_CMULAF:
-			gen_helper_cmulaf(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_cmulaf(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_CMULF:
 			gen_helper_cmulf(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -569,16 +562,16 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_ctz(tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_DBLALIGN:
-			gen_helper_dblalign(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_dblalign(tile_gpr[dest_reg], cpu_env, tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_DBLALIGN2:
-			gen_helper_dblalign2(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_dblalign2(tile_gpr[dest_reg], cpu_env, tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_DBLALIGN4:
-			gen_helper_dblalign4(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_dblalign4(tile_gpr[dest_reg], cpu_env, tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_DBLALIGN6:
-			gen_helper_dblalign6(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_dblalign6(tile_gpr[dest_reg], cpu_env, tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_DRAIN:
 		
@@ -690,22 +683,22 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_bdirect(ctx, imm64[0]);
 			break;
 		case TILEGX_OPC_JAL:
-			tcg_gen_movi_i64(tile_lr, ctx->pc + (INSTRUCTION_SIZE / BYTE_SIZE));
+			tcg_gen_movi_i64(tile_gpr[TILE_REG_LR], ctx->pc + (INSTRUCTION_SIZE / BYTE_SIZE));
 			gen_bdirect(ctx, imm64[0]);
 			break;
 		case TILEGX_OPC_JALR:
-			tcg_gen_movi_i64(tile_lr, ctx->pc + (INSTRUCTION_SIZE / BYTE_SIZE));
-			gen_bdirectr(ctx, tile_gpr[src_reg[0]);
+			tcg_gen_movi_i64(tile_gpr[TILE_REG_LR], ctx->pc + (INSTRUCTION_SIZE / BYTE_SIZE));
+			gen_bdirectr(ctx, tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_JALRP:
-			cg_gen_movi_i64(tile_lr, ctx->pc + (INSTRUCTION_SIZE / BYTE_SIZE));
-			gen_bdirectr(ctx, tile_gpr[src_reg[0]);
+			tcg_gen_movi_i64(tile_gpr[TILE_REG_LR], ctx->pc + (INSTRUCTION_SIZE / BYTE_SIZE));
+			gen_bdirectr(ctx, tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_JR:
-			gen_bdirectr(ctx, tile_gpr[src_reg[0]);
+			gen_bdirectr(ctx, tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_JRP:
-			gen_bdirectr(ctx, tile_gpr[src_reg[0]);
+			gen_bdirectr(ctx, tile_gpr[src_reg[0]]);
 			break;
 			/* TODO: generate interrupt for unaligned accesses */
 		case TILEGX_OPC_LD:
@@ -721,7 +714,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_ld8s_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_LD1U:
 		case TILEGX_OPC_LDNT1U:	
@@ -732,7 +725,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_ld8u_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_LD2S:
 		case TILEGX_OPC_LDNT2S:
@@ -743,7 +736,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_ld16s_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_LD2U:
 		case TILEGX_OPC_LDNT2U:
@@ -754,7 +747,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_ld16u_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_LD4S:
 		case TILEGX_OPC_LDNT4S:
@@ -765,7 +758,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_ld32s_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_LD4U:
 		case TILEGX_OPC_LDNT4U:
@@ -776,25 +769,25 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_ld32u_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_LD_ADD:
 		case TILEGX_OPC_LDNT_ADD:
 			tcg_gen_ld_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_LDNA:
-			tcg_gen_shli_i64(tile_gpr[src_reg[0], tile_gpr[src_reg[0], 3);
+			tcg_gen_shli_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], 3);
 			tcg_gen_ld_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			break;
 		case TILEGX_OPC_LDNA_ADD:
-			tcg_gen_shli_i64(tile_gpr[src_reg[0], tile_gpr[src_reg[0], 3);
+			tcg_gen_shli_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], 3);
 			tcg_gen_ld_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_LNK:
 		
@@ -806,13 +799,13 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_mov_i64(tile_gpr[src_reg[0]], tile_spr[spr_index(imm64[0])]);
 			break;
 		case TILEGX_OPC_MM:
-			gen_helper_mm(tile_gpr[dest_reg], tile_gpr[src_reg[0]], imm64[0], imm64[1]);
+			gen_helper_mm(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], imm64[0], imm64[1]);
 			break;
 		case TILEGX_OPC_MNZ:
 			gen_helper_mnz(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MTSPR:
-			tcg_gen_mov_i64(tile_spr[spr_num[imm64[0]]], tile_gpr[src_reg[0]] );
+			tcg_gen_mov_i64(tile_spr[spr_index(imm64[0])], tile_gpr[src_reg[0]] );
 			break;
 		case TILEGX_OPC_MUL_HS_HS:
 			gen_helper_mul_hs_hs(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -845,40 +838,40 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_mul_lu_lu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_HS_HS:
-			gen_helper_mula_hs_hs(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_hs_hs(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_HS_HU:
-			gen_helper_mula_hs_hu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_hs_hu(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_HS_LS:
-			gen_helper_mula_hs_ls(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_hs_ls(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_HS_LU:
-			gen_helper_mula_hs_lu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_hs_lu(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_HU_HU:
-			gen_helper_mula_hs_hu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_hs_hu(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_HU_LS:
-			gen_helper_mula_hu_ls(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_hu_ls(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_HU_LU:
-			gen_helper_mula_hu_lu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_hu_lu(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_LS_LS:
-			gen_helper_mula_ls_ls(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_ls_ls(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_LS_LU:
-			gen_helper_mula_ls_lu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_ls_lu(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULA_LU_LU:
-			gen_helper_mula_lu_lu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mula_lu_lu(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULAX:
-			gen_helper_mulax(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mulax(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MULX:
-			gen_helper_mulx(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_mulx(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_MZ:
 			gen_helper_mz(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -896,7 +889,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_or_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_ORI:
-			tcg_gen_ori_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], imm64[0]]);
+			tcg_gen_ori_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], imm64[0]);
 			break;
 		case TILEGX_OPC_PCNT:
 			gen_helper_pcnt(tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
@@ -920,11 +913,11 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			break;
 		case TILEGX_OPC_SHL16INSLI:
 			tcg_gen_shli_i64(ll_1,tile_gpr[src_reg[0]],16);
-			tcg_gen_ori_i64(tile_gpr[dest_reg],ll_1,imm64[0]&MASK16);			
+			tcg_gen_ori_i64(tile_gpr[dest_reg], ll_1, imm64[0]&MASK16);			
 			break;
 		case TILEGX_OPC_SHL1ADD:
 			tcg_gen_shli_i64(ll_1,tile_gpr[src_reg[0]],(int64_t) 1);
-			tcg_gen_add_i64(tile_gpr[dest_reg],ll_1,tile_gpr[src_reg[1]);
+			tcg_gen_add_i64(tile_gpr[dest_reg], ll_1, tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_SHL1ADDX:
 			tcg_gen_trunc_i64_i32(l_1, tile_gpr[src_reg[0]]);
@@ -935,7 +928,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			break;
 		case TILEGX_OPC_SHL2ADD:
 			tcg_gen_shli_i64(ll_1,tile_gpr[src_reg[0]], 2);
-			tcg_gen_add_i64(tile_gpr[dest_reg],ll_1,tile_gpr[src_reg[1]);
+			tcg_gen_add_i64(tile_gpr[dest_reg],ll_1,tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_SHL2ADDX:
 			tcg_gen_trunc_i64_i32(l_1, tile_gpr[src_reg[0]]);
@@ -946,7 +939,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			break;
 		case TILEGX_OPC_SHL3ADD:
 			tcg_gen_shli_i64(ll_1,tile_gpr[src_reg[0]], 3);
-			tcg_gen_add_i64(tile_gpr[dest_reg],ll_1,tile_gpr[src_reg[1]);
+			tcg_gen_add_i64(tile_gpr[dest_reg],ll_1,tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_SHL3ADDX:
 			tcg_gen_trunc_i64_i32(l_1, tile_gpr[src_reg[0]]);
@@ -992,7 +985,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_shruxi(tile_gpr[dest_reg], tile_gpr[src_reg[0]], ll_1);			
 			break;
 		case TILEGX_OPC_SHUFFLEBYTES:
-			gen_helper_shufflebytes(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_shufflebytes(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_ST:
 		case TILEGX_OPC_STNT:
@@ -1007,7 +1000,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_st8_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_ST2:
 		case TILEGX_OPC_STNT2:	
@@ -1018,7 +1011,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_st16_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_ST4:
 		case TILEGX_OPC_STNT4:
@@ -1029,14 +1022,14 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			tcg_gen_st32_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_ST_ADD:
 		case TILEGX_OPC_STNT_ADD:
 			tcg_gen_st_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], 0);
 			tcg_gen_movi_i64(ll_1, imm64[0]);
 			gen_helper_sign_extend8(ll_1, ll_1);
-			tcg_gen_add_i64(tile_gpr[src_reg[0], ll_1);
+			tcg_gen_add_i64(tile_gpr[src_reg[0]], tile_gpr[src_reg[0]], ll_1);
 			break;
 		case TILEGX_OPC_SUB:
 			tcg_gen_sub_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -1049,7 +1042,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			break;
 		case TILEGX_OPC_SUBXSC:
 			tcg_gen_sub_i64(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
-			gen_saturate_64s_i32(l_3, tile_gpr[dest_reg]);
+			gen_helper_saturate_64s_i32(l_3, tile_gpr[dest_reg]);
 			tcg_gen_ext32s_i64(tile_gpr[dest_reg],(TCGv_i64) l_3);
 			break;
 		case TILEGX_OPC_SWINT0:
@@ -1065,16 +1058,16 @@ TCGv_i64 ll_1, ll_2, ll_3;
 		
 			break;
 		case TILEGX_OPC_TBLIDXB0:
-			gen_helper_tblidxb0(tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
+			gen_helper_tblidxb0(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_TBLIDXB1:
-			gen_helper_tblidxb1(tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
+			gen_helper_tblidxb1(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_TBLIDXB2:
-			gen_helper_tblidxb2(tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
+			gen_helper_tblidxb2(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_TBLIDXB3:
-			gen_helper_tblidxb3(tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
+			gen_helper_tblidxb3(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]]);
 			break;
 		case TILEGX_OPC_V1ADD:
 			gen_helper_v1add(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -1126,37 +1119,37 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_v1ddotpu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1DDOTPUA:
-			gen_helper_v1ddotpua(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v1ddotpua(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1DDOTPUS:
 			gen_helper_v1ddotpus(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1DDOTPUSA:
-			gen_helper_v1ddotpusa(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v1ddotpusa(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1DOTP:
 			gen_helper_v1dotp(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1DOTPA:
-			gen_helper_v1dotpa(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v1dotpa(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1DOTPU:
 			gen_helper_v1dotpu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1DOTPUA:
-			gen_helper_v1dotpua(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v1dotpua(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1DOTPUS:
 			gen_helper_v1dotpus(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1DOTPUSA:
-			gen_helper_v1dotpusa(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v1dotpusa(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1INT_H:
 			gen_helper_v1int_h(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1INT_L:
-			gen_helper_v1int_l(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v1int_l(tile_gpr[dest_reg],  tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1MAXU:
 			gen_helper_v1maxu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -1188,7 +1181,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_v1mz(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1SADAU:
-			gen_helper_v1sadau(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v1sadau(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V1SADU:
 			gen_helper_v1sadu(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -1270,7 +1263,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_v2dotp(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V2DOTPA:
-			gen_helper_v2dotpa(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v2dotpa(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V2INT_H:
 			gen_helper_v2int_h(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -1296,7 +1289,7 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_v2mnz(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V2MULFSC:
-			gen_helper_v2mulfc(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v2mulfsc(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V2MULS:
 			gen_helper_v2muls(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -1317,10 +1310,10 @@ TCGv_i64 ll_1, ll_2, ll_3;
 			gen_helper_v2packuc(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V2SADAS:
-			gen_helper_v2sadas(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v2sadas(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V2SADAU:
-			gen_helper_v2sadau(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
+			gen_helper_v2sadau(tile_gpr[dest_reg], tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
 			break;
 		case TILEGX_OPC_V2SADS:
 			gen_helper_v2sads(tile_gpr[dest_reg], tile_gpr[src_reg[0]], tile_gpr[src_reg[1]]);
@@ -1403,9 +1396,9 @@ TCGv_i64 ll_1, ll_2, ll_3;
 		case TILEGX_OPC_NONE:
 			break;
 				
-	    invalid_opc:
-	        ret = gen_invalid(ctx);
-	        break;
+	  	default:
+			ret = gen_invalid(ctx);
+			break;
 	    }
 
 		tcg_temp_free_i32(l_1);
@@ -1501,7 +1494,7 @@ static inline void gen_intermediate_code_internal(CPUTileraState *env,
     case EXIT_NORETURN:
         break;
     case EXIT_PC_STALE:
-        tcg_gen_movi_i64(cpu_pc, ctx.pc);
+        tcg_gen_movi_i64(tile_pc, ctx.pc);
         /* FALLTHRU */
     case EXIT_PC_UPDATED:
         if (env->singlestep_enabled) {

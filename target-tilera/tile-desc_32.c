@@ -27,7 +27,7 @@
 #define TREG_ZERO 63
 
 #include <linux/stddef.h>
-#include "tile-desc.h"
+#include "tile-desc_32.h"
 
 const struct tilepro_opcode tilepro_opcodes[395] =
 {

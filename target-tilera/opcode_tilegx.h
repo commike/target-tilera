@@ -417,13 +417,13 @@ get_UnaryOpcodeExtension_Y1(tilegx_bundle_bits n)
   return (((unsigned int)(n >> 43)) & 0x3f);
 }
 
-
+/*
 static __inline int
 sign_extend(int n, int num_bits)
 {
   int shift = (int)(sizeof(int) * 8 - num_bits);
   return (n << shift) >> shift;
-}
+}*/
 
 
 

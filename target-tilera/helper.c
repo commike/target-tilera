@@ -24,11 +24,9 @@
 #include <stdio.h>
 #include <limits.h>
 
-/*#include "cpu.h"
-#include "softfloat.h"*/
+#include "cpu.h"
+/*#include "softfloat.h"*/
 #include "helper.h"
-
-#define bool int
 
 inline int64_t sign_extend(int64_t n, int num_bits)
 {
@@ -120,14 +118,28 @@ inline int64_t set_4_byte(int64_t word, int num, int64_t val)
 	return (word&~(0x00000000FFFFffffULL<<(32*num)))|((uint64_t) val<<(32*num));
 }
 
-int64_t helper_sign_extend8 (uint64_t src_a)
+uint64_t helper_sign_extend8 (uint64_t src_a)
 {
-	sign_extend_8(src_a);
+	return sign_extend_8(src_a);
 }
 
-int64_t helper_sign_extend16(uint64_t src_a)
+uint64_t helper_sign_extend16(uint64_t src_a)
 {
-	sign_extend_16(src_a);
+	return sign_extend_16(src_a);
+}
+
+uint64_t helper_saturate_64s_i32 (uint64_t n)
+{
+	return signed_saturate32(n);
+}
+
+/* This should only be called from translate, via gen_excp.
+   We expect that env->pc has already been updated.  */
+void QEMU_NORETURN helper_excp(CPUTileraState *env, int excp, int error)
+{
+    env->exception_index = excp;
+    env->error_code = error;
+    cpu_loop_exit(env);
 }
 
 /* logical instructions */
@@ -154,9 +166,8 @@ uint64_t helper_bfextu (uint64_t src_a, uint64_t bfstart, uint64_t bfend)
 	return dest;
 }
 
-uint64_t helper_bfins (uint64_t src_a, uint64_t bfstart, uint64_t bfend)
+uint64_t helper_bfins (uint64_t dest, uint64_t src_a, uint64_t bfstart, uint64_t bfend)
 {
-	uint64_t dest;
 	uint64_t mask = 0;
 	int start;
 	int end;
@@ -173,27 +184,24 @@ uint64_t helper_bfins (uint64_t src_a, uint64_t bfstart, uint64_t bfend)
 	return dest;
 }
 
-uint64_t helper_cmoveqz (uint64_t src_a, uint64_t src_b)
+uint64_t helper_cmoveqz (uint64_t dest, uint64_t src_a, uint64_t src_b)
 {
-	uint64_t dest;
 	uint64_t localsrc_b = src_b;
 	uint64_t localdest = dest;
 	dest = (src_a == 0) ? (localsrc_b) : (localdest);
 	return dest;
 }
 
-uint64_t helper_cmovnez (uint64_t src_a, uint64_t src_b)
+uint64_t helper_cmovnez (uint64_t dest, uint64_t src_a, uint64_t src_b)
 {
-	uint64_t dest;
 	uint64_t localsrc_b = src_b;
 	uint64_t localdest = dest;
 	dest = (src_a != 0) ? (localsrc_b) : (localdest);
 	return dest;
 }
 
-uint64_t helper_mm (uint64_t src_a, uint64_t bfstart, uint64_t bfend)
+uint64_t helper_mm (uint64_t dest, uint64_t src_a, uint64_t bfstart, uint64_t bfend)
 {
-	uint64_t dest;
 	uint64_t mask = 0;
 	int start;
 	int end;
@@ -207,6 +215,17 @@ uint64_t helper_mm (uint64_t src_a, uint64_t bfstart, uint64_t bfend)
 	dest = (dest & mask) | (src_a & (-1ULL ^ mask));
 	return dest;
 }
+
+uint64_t helper_mnz (uint64_t src_a, uint64_t src_b)
+{
+	return sign_extend_1((src_a != 0) ? 1 : 0) & src_b;
+}
+
+uint64_t helper_mz (uint64_t src_a, uint64_t src_b)
+{
+	return sign_extend_1((src_a == 0) ? 1 : 0) & src_b;
+}
+
 
 uint64_t helper_cmnz (uint64_t src_a, uint64_t src_b)
 {
@@ -336,39 +355,39 @@ uint64_t helper_ctz(uint64_t src_a)
 	return dest;
 }
 
-uint64_t helper_dblalign(uint64_t dest, uint64_t src_a, uint64_t src_b)
+uint64_t helper_dblalign(CPUTileraState *env, uint64_t dest, uint64_t src_a, uint64_t src_b)
 { 
 	int shift = (src_b & 7) * BYTE_SIZE;
 	uint64_t a = src_a;
 	uint64_t b = dest;
-	dest = (little_endian ()? (shift == 0 ? b : ((a << (64 - shift)) | (b >> shift))) \
+	dest = (little_endian (env)? (shift == 0 ? b : ((a << (64 - shift)) | (b >> shift))) \
 		: (shift == 0 ? b : ((b << shift) | (a >> (64 - shift)))));
 	return dest;
 }
 
-uint64_t helper_dblalign2(uint64_t dest, uint64_t src_a, uint64_t src_b)
+uint64_t helper_dblalign2(CPUTileraState *env, uint64_t dest, uint64_t src_a, uint64_t src_b)
 { 
 	uint64_t a = src_a;
 	uint64_t b = src_b;
-	dest = (little_endian ()? ((a << (64 - 2 * BYTE_SIZE)) | (b >> 2 * BYTE_SIZE)) \
+	dest = (little_endian (env)? ((a << (64 - 2 * BYTE_SIZE)) | (b >> 2 * BYTE_SIZE)) \
 	   : ((b << 2 * BYTE_SIZE) | (a >> (64 - 2 * BYTE_SIZE))));
 	return dest;
 }
 
-uint64_t helper_dblalign4(uint64_t dest, uint64_t src_a, uint64_t src_b)
+uint64_t helper_dblalign4(CPUTileraState *env, uint64_t dest, uint64_t src_a, uint64_t src_b)
 { 
 	uint64_t a = src_a;
 	uint64_t b = src_b;
-	dest = (little_endian ()? ((a << (64 - 4 * BYTE_SIZE)) | (b >> 4 * BYTE_SIZE)) \
+	dest = (little_endian (env)? ((a << (64 - 4 * BYTE_SIZE)) | (b >> 4 * BYTE_SIZE)) \
    		: ((b << 4 * BYTE_SIZE) | (a >> (64 - 4 * BYTE_SIZE))));
 	return dest;
 }
 
-uint64_t helper_dblalign6(uint64_t dest, uint64_t src_a, uint64_t src_b)
+uint64_t helper_dblalign6(CPUTileraState *env, uint64_t dest, uint64_t src_a, uint64_t src_b)
 { 
 	uint64_t a = src_a;
 	uint64_t b = src_b;
-	dest =(little_endian ()? ((a << (64 - 6 * BYTE_SIZE)) | (b >> 6 * BYTE_SIZE)) \
+	dest =(little_endian (env)? ((a << (64 - 6 * BYTE_SIZE)) | (b >> 6 * BYTE_SIZE)) \
 	   : ((b << 6 * BYTE_SIZE) | (a >> (64 - 6 * BYTE_SIZE))));
 	return dest;
 }
@@ -419,9 +438,8 @@ uint64_t helper_revbytes(uint64_t src_a)
 	return dest;
 }
 
-uint64_t helper_shufflebytes(uint64_t src_a, uint64_t src_b)
+uint64_t helper_shufflebytes(uint64_t dest, uint64_t src_a, uint64_t src_b)
 { 
-	uint64_t dest;
 	uint64_t a = src_a;
 	uint64_t b = src_b;
 	uint64_t d = dest;

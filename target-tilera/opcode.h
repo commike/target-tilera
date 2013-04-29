@@ -12,10 +12,17 @@
  *   more details.
  */
 
+/*
 #if defined(__tilepro__)
 #include "opcode_tilepro.h"
 #elif defined(__tilegx__)
 #include "opcode_tilegx.h"
 #else
 #error Unexpected Tilera chip type
+#endif*/
+
+#ifdef __tilepro__
+#include "opcode_tilepro.h"
+#else
+#include "opcode_tilegx.h"
 #endif

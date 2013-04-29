@@ -67,6 +67,7 @@ static inline TileraCPU *tilera_env_get_cpu(CPUTileraState *env)
 }
 
 #define ENV_GET_CPU(e) CPU(tilera_env_get_cpu(e))
-
+/* hw/tilera_pic.c */
+void cpu_tilera_pic_init(TileraCPU *cpu);
 
 #endif

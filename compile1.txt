@@ -1,0 +1,13 @@
+/home/sarmad/qemu-mod/target-tilera/translate.c: In function ‘gen_bdirectr’:
+/home/sarmad/qemu-mod/target-tilera/translate.c:238: warning: integer constant is too large for ‘long’ type
+/home/sarmad/qemu-mod/target-tilera/cpu.c: In function ‘cpu_get_phys_page_debug’:
+/home/sarmad/qemu-mod/target-tilera/cpu.c:120: warning: ‘phys’ is used uninitialized in this function
+/home/sarmad/qemu-mod/target-tilera/mmu_helper.c:27: warning: no previous prototype for ‘helper_ldl_phys’
+/home/sarmad/qemu-mod/target-tilera/mmu_helper.c:32: warning: no previous prototype for ‘helper_ldq_phys’
+/home/sarmad/qemu-mod/target-tilera/mmu_helper.c:37: warning: no previous prototype for ‘helper_ldl_l_phys’
+/home/sarmad/qemu-mod/target-tilera/mmu_helper.c:43: warning: no previous prototype for ‘helper_ldq_l_phys’
+/home/sarmad/qemu-mod/target-tilera/mmu_helper.c:49: warning: no previous prototype for ‘helper_stl_phys’
+/home/sarmad/qemu-mod/target-tilera/mmu_helper.c:54: warning: no previous prototype for ‘helper_stq_phys’
+/home/sarmad/qemu-mod/target-tilera/mmu_helper.c:59: warning: no previous prototype for ‘helper_stl_c_phys’
+/home/sarmad/qemu-mod/target-tilera/mmu_helper.c:75: warning: no previous prototype for ‘helper_stq_c_phys’
+/home/sarmad/qemu-mod/target-tilera/mmu_helper.c:110: warning: no previous prototype for ‘cpu_unassigned_access’

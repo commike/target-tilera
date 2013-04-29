@@ -533,7 +533,7 @@ int cpu_exec(CPUArchState *env)
 
 #elif defined(TARGET_TILERA)
                     if (interrupt_request & CPU_INTERRUPT_HARD) {
-                        env->exception_index = EXC_IRQ;
+                        env->exception_index = INTCTRL_0;
                         do_interrupt(env);
                         next_tb = 0;
                     }				
